@@ -6,6 +6,9 @@ class Manager:
     def __init__(self):
         self.departments = {}
         self.projects = []
+        self.dismissed_number = 0
+        self.hired_number = 0
+        self.completed_projects_number = 0
 
     def add_departments(self, departments):
         self.departments.update(**departments)
@@ -13,12 +16,35 @@ class Manager:
     def add_projects(self, projects):
         self.projects.extend(projects)
 
+    def appoint(self):
+        projects_to_delegate = []
+        for project in self.projects:
+            appointed = self.departments[project.p_type].appoint_employees(project)
+            if appointed:
+                projects_to_delegate.append(project)
+        for p in projects_to_delegate:
+            self.projects.remove(p)
+
     def hire_employees(self):
         num = 0
         for project in self.projects:
             hired_num = self.departments[project.p_type].add_employees(project.complicity)
             num += hired_num
-        return num
+        self.hired_number += num
+
+    def start_departments_daily_work(self):
+        company_dismissal_candidates = []
+        for dep_name, department in self.departments.items():
+            department_dismissal_candidates = department.start_employees_daily_work(dep_name)
+            company_dismissal_candidates.extend(department_dismissal_candidates)
+
+        if company_dismissal_candidates:
+            worst_employee = sorted(company_dismissal_candidates)[0]
+            worst_employee.dismiss()
+            self.dismissed_number += 1
+
+    def record_completed_project(self):
+        self.completed_projects_number += 1
 
 
 class Department:
@@ -43,6 +69,31 @@ class Department:
     @staticmethod
     def print_appoint_info(employee, project):
         print(f'Сотрудник {employee}/{employee.department.name} назначен на проект {project}')
+
+    def start_employees_daily_work(self, dep_name):
+        """
+        Starts the work of employees (busy then free)
+        :param dep_name: name of department
+        :return: dismissal_candidates -> list
+        """
+        dismissal_candidates = []
+        for employee in self.employees['busy']:
+            ready = employee.do_daily_work()
+            if ready:
+                self.record_completed_project()
+
+        for employee in self.employees['free']:
+            employee.do_daily_work()
+            dismiss = employee.check_dismissal()
+            if dismiss:
+                dismissal_candidates.append(employee)
+        print('\n', '---------------------', dep_name, '---------------------')
+        self.print_busy_info()
+        print('\n')
+        return dismissal_candidates
+
+    def record_completed_project(self):
+        self.manager.record_completed_project()
 
 
 class MobDepartment(Department):
@@ -111,6 +162,8 @@ class QaDepartment(Department):
 
 class Employee:
 
+    READY_STATUS = 1
+
     def __init__(self, department):
         self.department = department
         self.projects = []
@@ -124,23 +177,22 @@ class Employee:
         self.projects.append(project)
 
     def do_daily_work(self):
-        ready = False
+        self.days_counter += 1
         if self.is_busy:
-            ready = self._check_readiness()
-        if not ready:
-            self.days_counter += 1
+            self._check_readiness()
 
     def _check_readiness(self):
         if len(self.projects) > 0:
             current_project = self.projects[-1]
             if current_project.complicity == self.days_counter:
-                current_project.status = 1
-                self.days_counter = 0
+                current_project.status = self.READY_STATUS
+                self.days_counter = -1  # because days_counter works for busy than free employees
                 self.department.employees['busy'].remove(self)
                 self.department.employees['free'].append(self)
-                self.send_to_testing(current_project)
-                return True
-        return False
+                if self.READY_STATUS == 1:
+                    self.send_to_testing(current_project)
+                if self.READY_STATUS == 2:
+                    return True
 
     def send_to_testing(self, project):
         project.p_type = 'qa'
@@ -149,10 +201,8 @@ class Employee:
 
     @property
     def is_busy(self):
-        if len(self.projects) > 0:
-            current_project = self.projects[-1]
-            if current_project.status == 0:
-                return True
+        if self in self.department.employees['busy']:
+            return True
         return False
 
     def check_dismissal(self):
@@ -166,33 +216,17 @@ class Employee:
 
 
 class QaEmployee(Employee):
+    READY_STATUS = 2
 
     def do_daily_work(self):
-        ready = False
+        """
+        Do QA employee daily work and returns True if project completed
+        :return:
+        """
+        self.days_counter += 1
         if self.is_busy:
             ready = self._check_readiness()
-        if not ready:
-            self.days_counter += 1
-        return ready
-
-    @property
-    def is_busy(self):
-        if len(self.projects) > 0:
-            current_project = self.projects[-1]
-            if current_project.status == 1:
-                return True
-        return False
-
-    def _check_readiness(self):
-        if len(self.projects) > 0:
-            current_project = self.projects[-1]
-            if self.days_counter >= 1:
-                current_project.status = 2
-                self.days_counter = 0
-                self.department.employees['busy'].remove(self)
-                self.department.employees['free'].append(self)
-                return True
-        return False
+            return ready
 
 
 class Project:
@@ -208,7 +242,7 @@ class Project:
         self.status = 0
 
 
-def create_company():
+def create_company_manager():
     manager = Manager()
     departments = {
         'web': WebDepartment(manager),
@@ -229,60 +263,30 @@ def generate_projects():
 
 
 def main_process(days_num):
-    manager = create_company()
-    departments = manager.departments
+    manager = create_company_manager()
 
     # main loop
-    completed_projects_num = 0
-    hired_number = 0
-    dismissed_number = 0
     for day in range(days_num):
         day += 1
         print(f'День № {day}:')
 
         # hire employees for rest of projects
-        day_hired_number = manager.hire_employees()
-        hired_number += day_hired_number
+        manager.hire_employees()
 
         # new daily projects for manager
         manager.add_projects(generate_projects())
 
-        # appoint projects to employees
-        projects_to_delegate = []
-        for project in manager.projects:
-            appointed = departments[project.p_type].appoint_employees(project)
-            if appointed:
-                projects_to_delegate.append(project)
-        for p in projects_to_delegate:
-            manager.projects.remove(p)
+        # appoint employees to projects
+        manager.appoint()
 
         # do work
-        dismissal_candidates = []
-        for name, department in departments.items():
-            for employee in department.employees['busy']:
-                completed = employee.do_daily_work()
-                if completed:
-                    completed_projects_num += 1
-
-            for employee in department.employees['free']:
-                employee.do_daily_work()
-                dismiss = employee.check_dismissal()
-                if dismiss:
-                    dismissal_candidates.append(employee)
-            print('\n','---------------------', name, '---------------------')
-            department.print_busy_info()
-        print('\n')
-
-        if dismissal_candidates:
-            worst_employee = sorted(dismissal_candidates)[0]
-            worst_employee.dismiss()
-            dismissed_number += 1
+        manager.start_departments_daily_work()
 
         print(f'Конец дня № {day}----------------------------\n'
               f'---------------------------------------------\n')
-    print(f'projects completed = {completed_projects_num}\n'
-          f'hired = {hired_number}\n'
-          f'dismissed = {dismissed_number}')
+    print(f'projects completed = {manager.completed_projects_number}\n'
+          f'hired = {manager.hired_number}\n'
+          f'dismissed = {manager.dismissed_number}')
 
 
 main_process(10)
